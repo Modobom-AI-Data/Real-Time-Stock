@@ -1,0 +1,7 @@
+streamlit
+plotly
+pandas
+yfinance
+pytz
+ta>=0.10.2  # or whatever version you have
+
