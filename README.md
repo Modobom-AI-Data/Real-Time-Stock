@@ -52,7 +52,7 @@ Real-Time-Stock/
 
 4.  **Run the Streamlit app:**
     ```bash
-    streamlit run main.py
+    streamlit run app.py
     ```
 
 ## Usage
