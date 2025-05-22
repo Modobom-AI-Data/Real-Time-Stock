@@ -34,11 +34,15 @@ Real-Time-Stock/
 
 2.  **Create and activate a virtual environment:**
     ```bash
+    Step 1: Create a virtual environment
     python -m venv .venv
-    # On macOS/Linux:
+
+    Step 2: Activate the virtual environment
+    # macOS and Linux
     source .venv/bin/activate
-    # On Windows:
-    # .venv\Scripts\activate
+
+    # Windows PowerShell
+    .venv\Scripts\Activate.ps1
     ```
 
 3.  **Install the required packages:**
@@ -48,7 +52,7 @@ Real-Time-Stock/
 
 4.  **Run the Streamlit app:**
     ```bash
-    streamlit run zpp.py
+    streamlit run main.py
     ```
 
 ## Usage
