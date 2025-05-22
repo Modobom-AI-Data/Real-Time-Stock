@@ -1,7 +1,8 @@
 streamlit
-plotly
-pandas
 yfinance
+pandas
+numpy
+plotly
+scipy
+ta
 pytz
-ta>=0.10.2  # or whatever version you have
-

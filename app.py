@@ -1,193 +1,634 @@
 import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
-import pandas as pd
 import yfinance as yf
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import pytz
 import ta
 
-##########################################################################################
-## PART 1: Define Functions for Pulling, Processing, and Creating Techincial Indicators ##
-##########################################################################################
+# Set page config with dark theme
+st.set_page_config(
+    page_title="Real-Time Stock Dashboard",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        "Get Help": None,
+        "Report a bug": None,
+        "About": "Real-Time Stock Dashboard"
+    }
+)
 
-# Helper function to robustly extract a scalar value
-def _extract_scalar_price(value_from_iloc):
-    if isinstance(value_from_iloc, pd.Series):
-        if not value_from_iloc.empty:
-            return float(value_from_iloc.iloc[0])  # Take the first element if it's a Series
-        else:
-            return float('nan')   # Return NaN if Series is empty
-    try:
-        return float(value_from_iloc) # It might already be a scalar or convertible
-    except (TypeError, ValueError):
-        return float('nan') # If conversion fails, return NaN
+# Apply dark theme
+st.markdown("""
+<style>
+    .main {
+        background-color: #0e1117;
+        color: white;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #1a1c24;
+        border-radius: 4px 4px 0 0;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #31333f;
+    }
+    .stMarkdown {
+        color: white;
+    }
+    h1, h2, h3 {
+        color: white;
+    }
+    .metric-container {
+        background-color: #1a1c24;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 15px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .metric-container:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
+    }
+    .metric-value {
+        font-size: 2.2rem;
+        font-weight: bold;
+    }
+    .metric-label {
+        font-size: 1rem;
+        color: #9aa0b0;
+        margin-top: 5px;
+    }
+    .metric-title {
+        font-size: 1rem;
+        color: #9aa0b0;
+        margin-bottom: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 600;
+    }
+    .profit {
+        color: #20ce99;
+    }
+    .loss {
+        color: #ff5252;
+    }
+    .stDataFrame [data-testid="stDataFrameResizable"] {
+        background-color: #1a1c24;
+    }
+    .sidebar-ticker {
+        background-color: #1a1c24;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 8px 12px;
+    }
+    .ticker-container {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+    .ticker-symbol {
+        font-weight: bold;
+        font-size: 1.2rem;
+    }
+    .ticker-price {
+        font-weight: bold;
+    }
+    .dashboard-title {
+        text-align: center;
+        margin-bottom: 30px;
+        font-size: 2.5rem;
+        background: linear-gradient(90deg, #3a7bd5, #00d2ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
+    }
+    /* Custom button style */
+    .stButton > button {
+        background-color: #3a7bd5;
+        color: white;
+        border: none;
+        padding: 10px 24px;
+        border-radius: 4px;
+        font-weight: bold;
+        transition: all 0.3s;
+    }
+    .stButton > button:hover {
+        background-color: #2c5eb9;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+    .stock-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+    .stock-symbol {
+        font-size: 2.2rem;
+        font-weight: 800;
+    }
+    .peer-stocks {
+        display: flex;
+        gap: 15px;
+        flex-wrap: wrap;
+        margin-bottom: 25px;
+    }
+    .peer-stock-card {
+        background-color: #1a1c24;
+        border-radius: 8px;
+        padding: 12px;
+        min-width: 120px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .chart-container {
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        margin-bottom: 25px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Fetch stock data based on the ticker, period, and interval
-def fetch_stock_data(ticker, period, interval):
-    end_date = datetime.now()
-    if period == '1wk':
-        start_date = end_date - timedelta(days=7)
-        data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
+# Helper functions
+def format_number(num):
+    """Format numbers with suffixes like K, M, B, T for better readability"""
+    if num is None:
+        return "N/A"
+    
+    magnitude = 0
+    suffixes = ["", "K", "M", "B", "T"]
+    while abs(num) >= 1000 and magnitude < len(suffixes) - 1:
+        magnitude += 1
+        num /= 1000.0
+    
+    if magnitude > 0:
+        return f"{num:.2f}{suffixes[magnitude]}"
     else:
-        data = yf.download(ticker, period=period, interval=interval)
-    return data
+        return f"{num:.2f}"
 
-# Process data to ensure it is timezone-aware and has the correct format
-def process_data(data):
-    if data.index.tzinfo is None:
-        data.index = data.index.tz_localize('UTC')
-    data.index = data.index.tz_convert('US/Eastern')
-    data.reset_index(inplace=True)
-    data.rename(columns={'Date': 'Datetime'}, inplace=True)
-    return data
-
-# Calculate basic metrics from the stock data
-def calculate_metrics(data):
-    last_close = _extract_scalar_price(data['Close'].iloc[-1])
-    prev_close = _extract_scalar_price(data['Close'].iloc[0])
-    change = last_close - prev_close
-    pct_change = (change / prev_close) * 100 if prev_close != 0 else 0
-    high = _extract_scalar_price(data['High'].max())
-    low = _extract_scalar_price(data['Low'].min())
-    volume = _extract_scalar_price(data['Volume'].sum())
-    return last_close, change, pct_change, high, low, volume
-
-# Add simple moving average (SMA) and exponential moving average (EMA) indicators
-def add_technical_indicators(data):
-    close_prices = data['Close']
-    if not isinstance(close_prices, pd.Series):
-        # If 'Close' is a DataFrame (e.g., from multi-level columns or direct assignment as df[['Close']])
-        # try to convert to Series. If it has more than one column, this will raise an error, which is appropriate.
-        close_prices = close_prices.squeeze()
-    if close_prices.ndim > 1:
-        # If it's still not 1D (e.g. a Series of arrays), attempt to flatten if appropriate or raise error
-        # For this specific error (shape (80,1)), it means it's effectively a column vector.
-        close_prices = close_prices.iloc[:, 0] if isinstance(close_prices, pd.DataFrame) else close_prices.squeeze()
-
-    data['SMA_20'] = ta.trend.sma_indicator(close_prices, window=20)
-    data['EMA_20'] = ta.trend.ema_indicator(close_prices, window=20)
-    return data
-
-###############################################
-## PART 2: Creating the Dashboard App layout ##
-###############################################
-
-
-# Set up Streamlit page layout
-st.set_page_config(layout="wide")
-st.title('Real Time Stock Dashboard')
-
-
-# 2A: SIDEBAR PARAMETERS ############
-
-# Sidebar for user input parameters
-st.sidebar.header('Chart Parameters')
-ticker = st.sidebar.text_input('Ticker', 'ADBE')
-time_period = st.sidebar.selectbox('Time Period', ['1d', '1wk', '1mo', '1y', 'max'])
-chart_type = st.sidebar.selectbox('Chart Type', ['Candlestick', 'Line'])
-indicators = st.sidebar.multiselect('Technical Indicators', ['SMA 20', 'EMA 20'])
-
-# Mapping of time periods to data intervals
-interval_mapping = {
-    '1d': '1m',
-    '1wk': '30m',
-    '1mo': '1d',
-    '1y': '1wk',
-    'max': '1wk'
-}
-
-
-# 2B: MAIN CONTENT AREA ############
-
-# Update the dashboard based on user input
-if st.sidebar.button('Update'):
-    data = fetch_stock_data(ticker, time_period, interval_mapping[time_period])
-    data = process_data(data)
-    data = add_technical_indicators(data)
+def get_stock_data(ticker, period="1y", interval="1d"):
+    """Fetch stock data from Yahoo Finance"""
+    stock = yf.Ticker(ticker)
+    history = stock.history(period=period, interval=interval)
     
-    last_close, change, pct_change, high, low, volume = calculate_metrics(data)
-    
-    # Display main metrics
-    try:
-        st.metric(label=f"{ticker} Last Price", value=f"{last_close:.2f} USD", delta=f"{change:.2f} ({pct_change:.2f}%)")
+    if not history.empty:
+        # Calculate additional metrics
+        history['Date'] = history.index
+        history['Change'] = history['Close'].pct_change() * 100
+        history['Range'] = history['High'] - history['Low']
         
-        col1, col2, col3 = st.columns(3)
-        col1.metric("High", f"{high:.2f} USD")
-        col2.metric("Low", f"{low:.2f} USD")
-        col3.metric("Volume", f"{volume:,}")
-    except (TypeError, ValueError) as e:
-        st.error(f"Error displaying metrics: {e}")
-        st.warning("Please try a different ticker or time period.")
+        # Add technical indicators
+        history = add_technical_indicators(history)
     
-    # Plot the stock price chart
-    fig = go.Figure()
-    if chart_type == 'Candlestick':
-        fig.add_trace(go.Candlestick(x=data['Datetime'],
-                                     open=data['Open'],
-                                     high=data['High'],
-                                     low=data['Low'],
-                                     close=data['Close']))
+    return stock, history
+
+def add_technical_indicators(df):
+    """Add technical indicators to the dataframe"""
+    if df.empty:
+        return df
+    
+    # Moving Averages
+    df['SMA20'] = ta.trend.sma_indicator(df['Close'], window=20)
+    df['SMA50'] = ta.trend.sma_indicator(df['Close'], window=50)
+    df['SMA200'] = ta.trend.sma_indicator(df['Close'], window=200)
+    df['EMA20'] = ta.trend.ema_indicator(df['Close'], window=20)
+    df['EMA50'] = ta.trend.ema_indicator(df['Close'], window=50)
+    
+    # RSI
+    df['RSI'] = ta.momentum.rsi(df['Close'], window=14)
+    
+    # MACD
+    macd = ta.trend.MACD(df['Close'])
+    df['MACD'] = macd.macd()
+    df['MACD_Signal'] = macd.macd_signal()
+    df['MACD_Hist'] = macd.macd_diff()
+    
+    # Bollinger Bands
+    bollinger = ta.volatility.BollingerBands(df['Close'])
+    df['BB_Upper'] = bollinger.bollinger_hband()
+    df['BB_Lower'] = bollinger.bollinger_lband()
+    df['BB_Mid'] = bollinger.bollinger_mavg()
+    
+    return df
+
+def create_candlestick_chart(df, ticker, time_period, selected_indicators):
+    """Create an interactive candlestick chart with technical indicators"""
+    # Create figure with secondary y-axis
+    fig = make_subplots(
+        rows=2, 
+        cols=1, 
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        row_heights=[0.8, 0.2],
+        specs=[[{"secondary_y": True}],
+               [{"secondary_y": False}]]
+    )
+    
+    # Add candlestick chart
+    fig.add_trace(
+        go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name="Price",
+            increasing_line_color='#26a69a', 
+            decreasing_line_color='#ef5350'
+        ),
+        row=1, col=1
+    )
+    
+    # Add volume bar chart
+    fig.add_trace(
+        go.Bar(
+            x=df.index, 
+            y=df['Volume'],
+            name='Volume',
+            marker=dict(
+                color='rgba(100, 100, 255, 0.5)',
+            )
+        ),
+        row=2, col=1
+    )
+    
+    # Add selected technical indicators
+    if 'SMA20' in selected_indicators:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['SMA20'],
+                name='SMA 20',
+                line=dict(color='rgba(255, 255, 100, 0.8)', width=1.5)
+            ),
+            row=1, col=1
+        )
+    
+    if 'SMA50' in selected_indicators:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['SMA50'],
+                name='SMA 50',
+                line=dict(color='rgba(255, 100, 100, 0.8)', width=1.5)
+            ),
+            row=1, col=1
+        )
+    
+    if 'EMA20' in selected_indicators:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['EMA20'],
+                name='EMA 20',
+                line=dict(color='rgba(100, 255, 100, 0.8)', width=1.5)
+            ),
+            row=1, col=1
+        )
+    
+    if 'BB' in selected_indicators:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['BB_Upper'],
+                name='BB Upper',
+                line=dict(color='rgba(150, 150, 150, 0.5)', width=1),
+                hoverinfo='skip'
+            ),
+            row=1, col=1
+        )
+        
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['BB_Lower'],
+                name='BB Lower',
+                line=dict(color='rgba(150, 150, 150, 0.5)', width=1),
+                fill='tonexty',
+                fillcolor='rgba(150, 150, 150, 0.1)',
+                hoverinfo='skip'
+            ),
+            row=1, col=1
+        )
+    
+    if 'RSI' in selected_indicators:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['RSI'],
+                name='RSI',
+                line=dict(color='#9C27B0', width=1.5)
+            ),
+            row=2, col=1
+        )
+        
+        # Add RSI reference lines
+        fig.add_hline(y=70, line_width=1, line_dash="dash", line_color="red", row=2, col=1)
+        fig.add_hline(y=30, line_width=1, line_dash="dash", line_color="green", row=2, col=1)
+    
+    # Update layout
+    fig.update_layout(
+        title=f'{ticker} {time_period} Chart',
+        xaxis_title='',
+        yaxis_title='Price (USD)',
+        xaxis_rangeslider_visible=False,
+        template='plotly_dark',
+        height=600,
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        margin=dict(l=0, r=0, t=50, b=0)
+    )
+    
+    # Update y-axis labels
+    fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
+    
+    if 'RSI' in selected_indicators:
+        fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1)
     else:
-        fig = px.line(data, x='Datetime', y='Close')
+        fig.update_yaxes(title_text="Volume", row=2, col=1)
     
-    # Add selected technical indicators to the chart
-    for indicator in indicators:
-        if indicator == 'SMA 20':
-            fig.add_trace(go.Scatter(x=data['Datetime'], y=data['SMA_20'], name='SMA 20'))
-        elif indicator == 'EMA 20':
-            fig.add_trace(go.Scatter(x=data['Datetime'], y=data['EMA_20'], name='EMA 20'))
+    return fig
+
+# Get popular tickers data for quick view
+def get_popular_tickers_data():
+    popular_tickers = ["AAPL", "GOOGL", "AMZN", "META", "MSFT", "TSLA", "NVDA", "JPM"]
+    results = []
     
-    # Format graph
-    fig.update_layout(title=f'{ticker} {time_period.upper()} Chart',
-                      xaxis_title='Time',
-                      yaxis_title='Price (USD)',
-                      height=600)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Display historical data and technical indicators
-    st.subheader('Historical Data')
-    st.dataframe(data[['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume']])
-    
-    st.subheader('Technical Indicators')
-    st.dataframe(data[['Datetime', 'SMA_20', 'EMA_20']])
-
-
-# 2C: SIDEBAR PRICES ############
-
-# Sidebar section for real-time stock prices of selected symbols
-st.sidebar.header('Real-Time Stock Prices')
-stock_symbols = ['AAPL', 'GOOGL', 'AMZN', 'MSFT']
-for symbol in stock_symbols:
-    try:
-        real_time_data = fetch_stock_data(symbol, '1d', '1m')
-        if not real_time_data.empty:
-            real_time_data = process_data(real_time_data)
-
-            if 'Close' not in real_time_data.columns or 'Open' not in real_time_data.columns or real_time_data['Close'].empty or real_time_data['Open'].empty:
-                st.sidebar.text(f"{symbol}: Data columns missing or empty")
-                continue
-
-            last_price_raw = real_time_data['Close'].iloc[-1]
-            first_open_raw = real_time_data['Open'].iloc[0]
-
-            last_price = _extract_scalar_price(last_price_raw)
-            first_open = _extract_scalar_price(first_open_raw)
+    for pticker in popular_tickers:
+        try:
+            pstock = yf.Ticker(pticker)
+            pinfo = pstock.info
+            pprice = pinfo.get('currentPrice', None)
+            pchange = pinfo.get('regularMarketChange', 0)
+            pchange_pct = pinfo.get('regularMarketChangePercent', 0) * 100
             
-            if pd.isna(last_price) or pd.isna(first_open) or first_open == 0:
-                st.sidebar.text(f"{symbol}: Data unavailable")
-            else:
-                change = last_price - first_open
-                pct_change = (change / first_open) * 100
-                st.sidebar.metric(f"{symbol}", f"{last_price:.2f} USD", f"{change:.2f} ({pct_change:.2f}%)")
-        else:
-            st.sidebar.text(f"{symbol}: No data fetched")
-    except IndexError:
-        st.sidebar.text(f"{symbol}: Not enough data")
-    except Exception as e:
-        # Log error for debugging if needed: print(f"Error processing {symbol}: {e}")
-        st.sidebar.text(f"{symbol}: Error ({type(e).__name__})")
+            results.append({
+                "ticker": pticker,
+                "price": pprice,
+                "change": pchange,
+                "change_pct": pchange_pct
+            })
+        except:
+            pass
+    
+    return results
 
-# Sidebar information section
-st.sidebar.subheader('About')
-st.sidebar.info('This dashboard provides stock data and technical indicators for various time periods. Use the sidebar to customize your view.')
+# Sidebar
+with st.sidebar:
+    st.title("Chart Parameters")
+    
+    # Ticker input
+    st.subheader("Ticker")
+    ticker = st.text_input("", value="AAPL", key="ticker_input").upper()
+    
+    # Time period selection
+    st.subheader("Time Period")
+    time_period = st.selectbox(
+        "",
+        options=["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "ytd", "max"],
+        index=5
+    )
+    
+    # Chart type
+    st.subheader("Chart Type")
+    chart_type = st.selectbox(
+        "",
+        options=["Candlestick", "Line", "OHLC"],
+        index=0
+    )
+    
+    # Technical indicators
+    st.subheader("Technical Indicators")
+    selected_indicators = st.multiselect(
+        "",
+        options=["SMA20", "SMA50", "EMA20", "BB", "RSI", "MACD"],
+        default=["SMA20", "EMA20"]
+    )
+    
+    # Update button
+    update = st.button("Update", type="primary")
+
+# Main dashboard
+st.markdown("<h1 class=''>Real Time Stock Dashboard</h1>", unsafe_allow_html=True)
+
+# Display popular tickers at the top
+st.subheader("Market Overview")
+popular_data = get_popular_tickers_data()
+
+# Create columns for popular stocks
+if popular_data:
+    cols = st.columns(4)
+    for i, stock_data in enumerate(popular_data):
+        col_idx = i % 4
+        with cols[col_idx]:
+            price_color = "profit" if stock_data["change"] >= 0 else "loss"
+            change_sign = "+" if stock_data["change"] >= 0 else ""
+            
+            # Create clickable ticker containers
+            st.markdown(f"""
+            <div class="metric-container" onclick="document.querySelector('#ticker_input').value='{stock_data['ticker']}'; document.querySelector('button[type=primary]').click();" style="cursor:pointer;">
+                <div class="metric-title">{stock_data['ticker']}</div>
+                <div class="metric-value">${stock_data['price']:.2f}</div>
+                <div class="metric-label {price_color}">{change_sign}{stock_data['change']:.2f} ({change_sign}{stock_data['change_pct']:.2f}%)</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+# Main content
+if ticker:
+    # Get stock data
+    stock, history = get_stock_data(ticker, period=time_period)
+    
+    if not history.empty:
+        # Get basic info
+        info = stock.info
+        current_price = info.get('currentPrice', history['Close'].iloc[-1])
+        previous_close = info.get('previousClose', history['Close'].iloc[-2] if len(history) > 1 else None)
+        
+        # Calculate price change
+        if previous_close:
+            price_change = current_price - previous_close
+            price_change_pct = (price_change / previous_close) * 100
+        else:
+            price_change = 0
+            price_change_pct = 0
+        
+        # Stock header with company name
+        company_name = info.get('shortName', ticker)
+        st.markdown(f"""
+        <div class="stock-header">
+            <div class="stock-symbol">{ticker}</div>
+            <div style="font-size: 1.5rem; opacity: 0.7;">{company_name}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Display key metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            price_color = "profit" if price_change >= 0 else "loss"
+            change_sign = "+" if price_change >= 0 else ""
+            st.markdown(f"""
+            <div class="metric-container">
+                <div class="metric-title">Last Price</div>
+                <div class="metric-value">{current_price:.2f} USD</div>
+                <div class="metric-label {price_color}">{change_sign}{price_change:.2f} ({change_sign}{price_change_pct:.2f}%)</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+            <div class="metric-container">
+                <div class="metric-title">Day High</div>
+                <div class="metric-value">{info.get('dayHigh', history['High'].max()):.2f} USD</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"""
+            <div class="metric-container">
+                <div class="metric-title">Day Low</div>
+                <div class="metric-value">{info.get('dayLow', history['Low'].min()):.2f} USD</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            volume = info.get('volume', history['Volume'].iloc[-1])
+            st.markdown(f"""
+            <div class="metric-container">
+                <div class="metric-title">Volume</div>
+                <div class="metric-value">{format_number(volume)}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Additional metrics row
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown(f"""
+            <div class="metric-container">
+                <div class="metric-title">Market Cap</div>
+                <div class="metric-value">{format_number(info.get('marketCap', 'N/A'))}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            pe_ratio = info.get('trailingPE', 'N/A')
+            pe_display = f"{pe_ratio:.2f}" if isinstance(pe_ratio, (int, float)) else pe_ratio
+            st.markdown(f"""
+            <div class="metric-container">
+                <div class="metric-title">P/E Ratio</div>
+                <div class="metric-value">{pe_display}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            div_yield = info.get('dividendYield', 0)
+            div_display = f"{div_yield * 100:.2f}%" if div_yield else "N/A"
+            st.markdown(f"""
+            <div class="metric-container">
+                <div class="metric-title">Dividend Yield</div>
+                <div class="metric-value">{div_display}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            fifty_two_wk_high = info.get('fiftyTwoWeekHigh', 'N/A')
+            fifty_two_wk_low = info.get('fiftyTwoWeekLow', 'N/A')
+            st.markdown(f"""
+            <div class="metric-container">
+                <div class="metric-title">52-Week Range</div>
+                <div class="metric-value">{fifty_two_wk_low if isinstance(fifty_two_wk_low, str) else f"{fifty_two_wk_low:.2f}"} - {fifty_two_wk_high if isinstance(fifty_two_wk_high, str) else f"{fifty_two_wk_high:.2f}"}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+             # Show additional company information
+        if 'longBusinessSummary' in info:
+            with st.expander("Company Overview"):
+                st.write(info['longBusinessSummary'])
+                
+                # Display additional company info in columns
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Sector:** " + info.get('sector', 'N/A'))
+                    st.markdown("**Industry:** " + info.get('industry', 'N/A'))
+                    st.markdown("**Country:** " + info.get('country', 'N/A'))
+                
+                with col2:
+                    st.markdown("**Employees:** " + str(info.get('fullTimeEmployees', 'N/A')))
+                    st.markdown("**Website:** " + info.get('website', 'N/A'))
+                    st.markdown("**Exchange:** " + info.get('exchange', 'N/A'))
+        
+        # Create and display chart inside container
+        st.markdown(f"<div class='chart-container'>", unsafe_allow_html=True)
+        fig = create_candlestick_chart(history, ticker, time_period, selected_indicators)
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+       
+        
+        # Display related stocks
+        sector = info.get('sector', None)
+        if sector:
+            st.subheader(f"Other {sector} Stocks")
+            # Get stocks in same sector
+            sector_tickers = {
+                "Technology": ["AAPL", "MSFT", "GOOGL", "META", "NVDA"],
+                "Healthcare": ["JNJ", "PFE", "UNH", "MRK", "ABBV"],
+                "Finance": ["JPM", "BAC", "WFC", "C", "GS"],
+                "Consumer": ["AMZN", "WMT", "PG", "KO", "MCD"],
+                "Energy": ["XOM", "CVX", "COP", "SLB", "EOG"],
+                "Industrial": ["CAT", "HON", "MMM", "GE", "BA"]
+            }
+            
+            related_tickers = sector_tickers.get(sector, [])[:5]
+            related_tickers = [t for t in related_tickers if t != ticker]
+            
+            if related_tickers:
+                cols = st.columns(len(related_tickers))
+                
+                for i, rel_ticker in enumerate(related_tickers):
+                    try:
+                        rel_stock = yf.Ticker(rel_ticker)
+                        rel_info = rel_stock.info
+                        rel_price = rel_info.get('currentPrice', None)
+                        rel_change = rel_info.get('regularMarketChange', 0)
+                        rel_change_pct = rel_info.get('regularMarketChangePercent', 0) * 100
+                        
+                        price_color = "profit" if rel_change >= 0 else "loss"
+                        change_sign = "+" if rel_change >= 0 else ""
+                        
+                        with cols[i]:
+                            st.markdown(f"""
+                            <div class="metric-container" onclick="document.querySelector('#ticker_input').value='{rel_ticker}'; document.querySelector('button[type=primary]').click();" style="cursor:pointer;">
+                                <div class="metric-title">{rel_ticker}</div>
+                                <div class="metric-value">${rel_price:.2f}</div>
+                                <div class="metric-label {price_color}">{change_sign}{rel_change:.2f} ({change_sign}{rel_change_pct:.2f}%)</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    except Exception as e:
+                        with cols[i]:
+                            st.error(f"Could not load data for {rel_ticker}")
+    else:
+        st.error(f"No data available for {ticker}")
+else:
+    st.info("Please enter a stock ticker in the sidebar and click Update to view stock information.")
