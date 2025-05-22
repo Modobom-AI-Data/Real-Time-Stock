@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import pytz
 import ta
-
+# test
 # Set page config with dark theme
 st.set_page_config(
     page_title="Real-Time dss Stock Dashboard hi",
@@ -589,7 +589,7 @@ if ticker:
         # Display related stocks
         sector = info.get('sector', None)
         if sector:
-            st.subheader(f"Other {sector} Stocks")
+            st.subheader(f"***Other {sector} Stocks***")
             # Get stocks in same sector
             sector_tickers = {
                 "Technology": ["AAPL", "MSFT", "GOOGL", "META", "NVDA"],
