@@ -10,7 +10,7 @@ import ta
 
 # Set page config with dark theme
 st.set_page_config(
-    page_title="Real-Time Stock Dashboard",
+    page_title="Real-Time dss Stock Dashboard hi",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
